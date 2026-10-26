@@ -1,0 +1,3 @@
+# Build the Go binary from this fork first; retain the deployed runtime unchanged.
+FROM threehats/foundryvtt-rest-api-relay@sha256:ef7a0c07d494a320ac2f3b165f3ee1ae8e430feb32ca8691cff91031286327af
+COPY relay /app/relay

@@ -1735,29 +1735,6 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 		return "", fmt.Errorf("login form not found: %w", err)
 	}
 
-	// Pre-submit: if a user-select dropdown is present, verify the target user
-	// exists and is not already active (disabled/greyed = already logged in).
-	var preCheck string
-	if err := chromedp.Run(loginCtx, chromedp.Evaluate(fmt.Sprintf(`
-		(function() {
-			const sel = document.querySelector('select[name="userid"]');
-			if (!sel) return 'ok'; // single-user or password-only form
-			const opts = Array.from(sel.options);
-			const match = opts.find(o => o.textContent.trim().toLowerCase() === %q);
-			if (!match) return 'not-found';
-			if (match.disabled) return 'already-active';
-			return 'ok';
-		})()
-	`, strings.ToLower(username)), &preCheck)); err != nil {
-		log.Warn().Err(err).Msg("Pre-submit user check eval failed; proceeding without pre-check")
-	}
-	switch preCheck {
-	case "not-found":
-		return "", fmt.Errorf("configured Foundry user not found on this server (check credential settings)")
-	case "already-active":
-		return "", fmt.Errorf("configured Foundry user is already logged in (another active session may be holding the slot)")
-	}
-
 	// POST /join with an explicit password instead of filling the form: Foundry's
 	// form drops an empty password field on submit, so a passwordless GM (stored as
 	// createPassword("")) can never log in through it. Posting ourselves guarantees
@@ -1765,16 +1742,21 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 	js := fmt.Sprintf(`
 		(async function() {
 			var userId = %q;
-			const sel = document.querySelector('select[name="userid"]');
+			// Foundry 14 renamed userid to userId. Use the actual form field
+			// name in the request, without retrying credentials against other users.
+			const sel = document.querySelector('select[name="userId"], select[name="userid"]');
+			const userField = sel ? sel.name : 'userid';
 			if (sel) {
 				const match = Array.from(sel.options).find(o => o.textContent.trim().toLowerCase() === %q);
-				if (match) userId = match.value;
+				if (!match || !match.value) return 'not-found';
+				if (sel.disabled || match.disabled || (match.parentElement.tagName === 'OPTGROUP' && match.parentElement.disabled)) return 'already-active';
+				userId = match.value;
 			}
 			try {
 				const resp = await fetch('/join', {
 					method: 'POST',
 					headers: { 'Content-Type': 'application/json' },
-					body: JSON.stringify({ action: 'join', userid: userId, password: %q })
+					body: JSON.stringify({ action: 'join', [userField]: userId, password: %q })
 				});
 				if (resp.ok) {
 					let data = {};
@@ -1796,6 +1778,12 @@ func loginToFoundry(ctx context.Context, username, password string) (string, err
 		func(p *runtime.EvaluateParams) *runtime.EvaluateParams { return p.WithAwaitPromise(true) },
 	)); err != nil {
 		return "", fmt.Errorf("login eval: %w", err)
+	}
+	switch result {
+	case "not-found":
+		return "", fmt.Errorf("configured Foundry user not found on this server (check credential settings)")
+	case "already-active":
+		return "", fmt.Errorf("configured Foundry user is already logged in (another active session may be holding the slot)")
 	}
 	if strings.HasPrefix(result, "fail:") {
 		return "", fmt.Errorf("login rejected by Foundry: %s", strings.TrimPrefix(result, "fail:"))

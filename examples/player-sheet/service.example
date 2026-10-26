@@ -1,0 +1,15 @@
+[Unit]
+Description=Foundry Player read-only sheet
+After=network-online.target foundry.service foundry-api-session.service
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/srv/foundry-relay/player-sheet
+ExecStart=/usr/bin/node /srv/foundry-relay/player-sheet/server.mjs
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+[Install]
+WantedBy=multi-user.target
